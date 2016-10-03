@@ -1,0 +1,121 @@
+---
+title: "Machine Learning - Prediction Assignment"
+author: "Benjamin Van Vliet"
+date: "October, 2016"
+output: html_document
+contribution: "Data sets for project sourced from http://groupware.les.inf.puc-rio.br/har under CC BY-SA"
+---
+## Overview
+The purpose of this assignment is to develop a predictive model to describe a class of weight lifting exercise that is being undertaken from specific wearable accelerometers. The modelling exercises consists of two parts, data cleansing and setup, and the modelling exercise. Results against a training data set are then predicted using the generated model.
+
+## Load required libraries
+Load required libraries for modelling and analysis
+```{r results='hide', message=F, warning=F}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+
+# Set seed to enable repeatability and interpretation of results
+set.seed("1337")
+```
+
+
+## Downloading and loading test and training data sets
+Download the training and testing data sets
+```{r}
+setwd("E:/Users/Ben/Dropbox/Private/Coursea Data Science Specialisation/08 Machine Learning")
+
+# Download training data set if it doesn't already exist in directory
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+if(!file.exists("./pml-training.csv")){
+    download.file(url, "./pml-training.csv", mode="wb")
+}
+
+# Download testing data set if it doesn't already exist in directory
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if(!file.exists("./pml-testing.csv")){
+    download.file(url, "./pml-testing.csv", mode="wb")
+}
+
+# Create a vector of invalid inputs for us to cleanse the data input values
+invalidInputs =c("", " ", "NA", "NAs", "NULL", "#DIV/0!")
+
+# Load the training and testing data sets that have been downloaded, ignoring invalid inputs
+trainingData <- read.csv("pml-training.csv", na.strings=invalidInputs)
+testingData <- read.csv("pml-testing.csv", na.strings=invalidInputs)
+```
+
+## Perform required data cleansing
+There are multiple column data inputs factors that will affect rfModel build that must be cleaned up:
+* Columns with only NA values will be dropped
+* Columns where variance is zero or close to zero (no meaningful data for rfModel build)
+* Columns that have highly correlated variables (will skew rfModel build)
+Data format for dates will also be corrected
+The output is clean training and testing sets
+```{r, results='hide', message=F, warning=F}
+
+# Clean up training set
+# Remove any NA columns
+cleanTraining = trainingData[, colSums(is.na(trainingData)) == 0]
+
+# Remove non-quantitative and timestep columns, as the correlation and predictions to be drawn are not temporal in nature
+toRemove <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")
+cleanTraining <- cleanTraining[, -which(names(trainingData) %in% toRemove)]
+
+# Remove columns with variances at or near zero
+zeroVarianceColumns = nearZeroVar(cleanTraining[sapply(cleanTraining, is.numeric)], saveMetrics=TRUE)
+cleanTraining = cleanTraining[, zeroVarianceColumns[, 'nzv'] == 0] 
+
+# Remove columns with very high correlations. This will remove columns that are so correlated that they won't support rfModel build with any meaningful descriptive or predictive value
+# Use a threshold of 0.8 (very highly correlated)
+highCorrelation <- findCorrelation(cor(cleanTraining[1:52]), cutoff=0.8) 
+highCorrelation = sort(highCorrelation)
+cleanTraining <- cleanTraining[,-c(highCorrelation)]
+
+# Create a feature set from the clean training data set
+featureSet <- colnames(cleanTraining)
+modellingData <- cleanTraining[featureSet]
+```
+
+## Modelling exercise
+The modelling data set is now split into a training and testing set. 60% is used for training and 40% for testing.
+The test and training set creation will respect a required distribution of samples from each class. As described within the data set vignette, the class variable represents how Dumbbell Biceps Curl were performed in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+```{r}
+# A partition is created respecting required distribution of samples from respective class ("classe") groups.
+inTrainingSet <- createDataPartition(modellingData$classe, p=0.6, list=FALSE)
+training <- modellingData[inTrainingSet,]
+testing <- modellingData[-inTrainingSet,]
+```
+A predictive model is created using Random Forest. A 4-fold cross validation is used and the model summary printed for interpretation of outcomes of the exercise.
+```{r}
+control <- trainControl(method="cv", 4)
+rfModel <- train(classe ~ ., data=training, method="rf", trControl=control, ntree=250)
+rfModel
+```
+
+## Model validation
+The performance of the rfModel is demonstrated against the testing data set.  
+```{r}
+predict <- predict(rfModel, testing)
+confusionMatrix(testing$classe, predict)
+accuracy <- postResample(predict, testing$classe)
+accuracy
+```
+The estimated accuracy of the rfModel is `r accuracy["Accuracy"]`.
+
+## Visualisation of Generated RF Model
+```{r}
+treerfModel <- rpart(classe ~ ., data=cleanTraining, method="class")
+prp(treerfModel) 
+```
+
+## Generation of predicted classes for Prediction Quiz
+```{r}
+# Class variable not available for testing data set, but use all other data fpr created features from testing set for preditiction
+testingData <- testingData[featureSet[featureSet!='classe']]
+
+# Create and display answer set based on the prediction model
+answerSet <- predict(rfModel, newdata=testingData)
+answerSet
+```
